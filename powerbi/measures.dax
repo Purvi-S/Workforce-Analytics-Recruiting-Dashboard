@@ -1,0 +1,98 @@
+// =============================================================================
+// Power BI measures for the Workforce Analytics report.
+// Import the CSVs from output/powerbi/ (Get Data > Text/CSV), then create these
+// in a dedicated "_Measures" table.
+//
+// Relationships (single direction, many-to-one):
+//   time_to_hire[recruiter_id]        -> recruiter_leaderboard[recruiter_id]
+//   recruiter_productivity[recruiter_id] -> recruiter_leaderboard[recruiter_id]
+//   time_to_hire[dept_name]           -> attrition_ttm[dept_name]
+//   retention_risk[dept_name]         -> attrition_ttm[dept_name]
+//   attrition_monthly[dept_name]      -> attrition_ttm[dept_name]
+// Mark a Date table (CALENDARAUTO) and relate it to attrition_monthly[month_start]
+// and time_to_hire[filled_date].
+// =============================================================================
+
+// ---- Recruiting --------------------------------------------------------------
+
+Reqs Filled = COUNTROWS ( time_to_hire )
+
+Avg Days to Fill = AVERAGE ( time_to_hire[days_to_fill] )
+
+Median Days to Fill = MEDIAN ( time_to_hire[days_to_fill] )
+
+% Within SLA =
+DIVIDE ( SUM ( time_to_hire[within_sla] ), [Reqs Filled] )
+
+Days to Fill vs Prior Year =
+VAR cur = [Median Days to Fill]
+VAR prev =
+    CALCULATE ( [Median Days to Fill], SAMEPERIODLASTYEAR ( 'Date'[Date] ) )
+RETURN
+    cur - prev
+
+Applicants per Hire =
+DIVIDE ( SUM ( funnel_by_source[applied] ), SUM ( funnel_by_source[hired] ) )
+
+Apply-to-Hire % =
+DIVIDE ( SUM ( funnel_by_source[hired] ), SUM ( funnel_by_source[applied] ) )
+
+Offer Accept % =
+DIVIDE ( SUM ( funnel_by_source[hired] ), SUM ( funnel_by_source[offered] ) )
+
+Bottleneck Stage =
+// Returns the slowest controllable stage for the department in context.
+CALCULATE (
+    SELECTEDVALUE ( stage_dwell[stage] ),
+    stage_dwell[is_bottleneck] = 1
+)
+
+// ---- Retention ---------------------------------------------------------------
+
+Headcount = SUM ( attrition_monthly[headcount_start] )
+
+Exits = SUM ( attrition_monthly[exits] )
+
+Attrition % (TTM) =
+VAR endDate = MAX ( 'Date'[Date] )
+VAR exitsTTM =
+    CALCULATE ( [Exits], DATESINPERIOD ( 'Date'[Date], endDate, -12, MONTH ) )
+VAR avgHC =
+    CALCULATE (
+        AVERAGEX ( VALUES ( attrition_monthly[month_start] ), [Headcount] ),
+        DATESINPERIOD ( 'Date'[Date], endDate, -12, MONTH )
+    )
+RETURN
+    DIVIDE ( exitsTTM, avgHC )
+
+Voluntary Share % =
+DIVIDE ( SUM ( attrition_monthly[voluntary_exits] ), [Exits] )
+
+High-Risk Employees =
+CALCULATE ( COUNTROWS ( retention_risk ), retention_risk[risk_band] = "High" )
+
+% High Risk =
+DIVIDE ( [High-Risk Employees], COUNTROWS ( retention_risk ) )
+
+// ---- Planning ----------------------------------------------------------------
+
+Expected Exits Next Q = SUM ( workforce_plan[expected_exits_next_q] )
+
+Expected Fills Next Q = SUM ( workforce_plan[expected_fills_next_q] )
+
+Capacity Gap = [Expected Fills Next Q] - [Expected Exits Next Q]
+
+Capacity Gap Color =
+IF ( [Capacity Gap] < 0, "#C0392B", "#1E8449" )
+
+// ---- Data health (shown on its own report page) ------------------------------
+
+DQ Checks Passed =
+CALCULATE ( COUNTROWS ( dq_results ), dq_results[status] = "pass" )
+
+DQ Status =
+IF (
+    CALCULATE ( COUNTROWS ( dq_results ), dq_results[status] = "fail" ) > 0,
+    "❌ Blocking issues",
+    "✅ " & [DQ Checks Passed] & " / " & COUNTROWS ( dq_results ) & " checks passed"
+)
